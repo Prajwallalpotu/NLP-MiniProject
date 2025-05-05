@@ -7,16 +7,33 @@ import pandas as pd
 from resume_parser import extract_text_from_resume
 from nlp_processor import preprocess_text, extract_features
 from job_matcher import match_resume_with_job, suggest_jobs
-from dotenv import load_dotenv  # Import dotenv
+from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": os.getenv("FRONTEND_URL", "http://localhost:3000")}}, supports_credentials=True, allow_headers="*", methods=["GET", "POST", "OPTIONS"])
+CORS(app, resources={r"/api/*": {"origins": os.getenv("FRONTEND_URL", "http://localhost:3000")}}, 
+     supports_credentials=True, allow_headers="*", methods=["GET", "POST", "OPTIONS"])
+
+# Check for OpenAI API key
+if not os.getenv("OPENAI_API_KEY"):
+    logger.warning("OPENAI_API_KEY is not set. Resume matching will use fallback method.")
 
 # Load job dataset once
-jobs_df = pd.read_csv(os.getenv("JOB_DATASET_PATH", './data/job.csv'))
+try:
+    jobs_df = pd.read_csv(os.getenv("JOB_DATASET_PATH", './data/job.csv'))
+    logger.info(f"Successfully loaded job dataset with {len(jobs_df)} entries")
+except Exception as e:
+    logger.error(f"Error loading job dataset: {e}")
+    # Create an empty DataFrame with expected columns
+    jobs_df = pd.DataFrame(columns=['Job_Title', 'Company_Name', 'Location', 'Experience', 'CTC', 'Posted'])
 
 @app.route('/')
 def index():
@@ -28,16 +45,17 @@ def health_check():
 
 @app.route('/api/resume-match', methods=['POST'])
 def resume_match():
-    print("Request received at /api/resume-match")  # Debugging log
+    logger.info("Request received at /api/resume-match")
+    
     if 'resume' not in request.files or 'jobDescription' not in request.form:
-        print("Missing resume or job description")  # Debugging log
+        logger.warning("Missing resume or job description in request")
         return jsonify({"error": "Missing resume file or job description"}), 400
     
     resume_file = request.files['resume']
     job_description = request.form['jobDescription']
     
     if resume_file.filename == '':
-        print("No resume file selected")  # Debugging log
+        logger.warning("No resume file selected")
         return jsonify({"error": "No resume file selected"}), 400
     
     # Save the uploaded file temporarily
@@ -48,17 +66,25 @@ def resume_match():
     
     try:
         # Process the resume
+        logger.info(f"Extracting text from resume: {filename}")
         resume_text = extract_text_from_resume(file_path)
         
+        if not resume_text or len(resume_text.strip()) < 10:
+            logger.warning(f"Failed to extract meaningful text from resume: {filename}")
+            return jsonify({"error": "Could not extract text from the resume. Please check the file format."}), 400
+        
         # Match resume with job description
+        logger.info("Matching resume with job description")
         match_results = match_resume_with_job(resume_text, job_description)
         
         # Clean up the temporary file
         os.remove(file_path)
+        logger.info("Resume analysis completed successfully")
         
         return jsonify(match_results), 200
     
     except Exception as e:
+        logger.error(f"Error processing resume: {e}")
         # Clean up in case of error
         if os.path.exists(file_path):
             os.remove(file_path)

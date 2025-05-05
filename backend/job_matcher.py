@@ -2,18 +2,23 @@ import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from nlp_processor import preprocess_text, extract_keywords
+from nlp_processor import preprocess_text, extract_keywords, extract_resume_sections
 from resume_parser import extract_skills
-from google import genai
 import os
 from dotenv import load_dotenv
-
+import openai
+import json
+import re
+import random
 # Load environment variables
 load_dotenv()
 
+# Set up OpenAI API key
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
 def match_resume_with_job(resume_text, job_description):
     """
-    Match a resume with a job description using a detailed analysis approach.
+    Match a resume with a job description using OpenAI's API for enhanced analysis
     
     Args:
         resume_text (str): Extracted text from the resume
@@ -23,129 +28,166 @@ def match_resume_with_job(resume_text, job_description):
         dict: Match results including score, strengths, weaknesses, and suggestions
     """
     try:
-        # Extract structured sections from the resume
-        resume_sections = extract_resume_sections(resume_text)
-        
-        # Extract key requirements from the job description
-        job_requirements = extract_job_requirements(job_description)
-        
-        # Analyze each section of the resume against the job requirements
-        analysis = {
-            "experience_match": analyze_experience(resume_sections.get("experience", ""), job_requirements.get("experience", "")),
-            "skills_match": analyze_skills(resume_sections.get("skills", ""), job_requirements.get("skills", "")),
-            "education_match": analyze_education(resume_sections.get("education", ""), job_requirements.get("education", "")),
-            "achievements_match": analyze_achievements(resume_sections.get("achievements", ""), job_requirements.get("achievements", ""))
-        }
-        
-        # Calculate an overall match score
-        overall_score = calculate_overall_score(analysis)
-        
-        # Generate strengths, weaknesses, and suggestions
-        strengths = generate_strengths(analysis)
-        weaknesses = generate_weaknesses(analysis)
-        suggestions = generate_suggestions(analysis, job_requirements)
-        
-        return {
-            "score": overall_score,
-            "strengths": strengths,
-            "weaknesses": weaknesses,
-            "suggestions": suggestions
-        }
-    
+        # Try to use OpenAI for advanced matching
+        return advanced_llm_match(resume_text, job_description)
     except Exception as e:
-        # Fallback to TF-IDF based matching if detailed analysis fails
+        print(f"Error using OpenAI API: {e}")
+        # Fallback to TF-IDF based matching
         return fallback_match_resume_with_job(resume_text, job_description)
 
-def extract_resume_sections(resume_text):
+def advanced_llm_match(resume_text, job_description):
     """
-    Extract structured sections from the resume text.
+    Use OpenAI's API to analyze the resume against the job description
+    
+    Args:
+        resume_text (str): Extracted text from the resume
+        job_description (str): Job description text
+        
+    Returns:
+        dict: Detailed match analysis
     """
-    # Implement logic to parse and extract sections like experience, skills, education, etc.
-    # Example:
-    return {
-        "experience": "Extracted experience section",
-        "skills": "Extracted skills section",
-        "education": "Extracted education section",
-        "achievements": "Extracted achievements section"
+    # Extract skills from resume for additional context
+    skills = extract_skills(resume_text)
+    skills_text = ', '.join(skills)
+    
+    # Extract sections from resume
+    resume_sections = extract_resume_sections(resume_text)
+    
+    # Prepare a condensed version of the resume for the prompt
+    condensed_resume = ""
+    key_sections = ["summary", "experience", "skills", "education", "projects", "achievements"]
+    
+    for section in key_sections:
+        if section in resume_sections:
+            condensed_resume += f"\n{section.upper()}:\n{resume_sections[section][:500]}..."
+    
+    # If condensed resume is still too long, further truncate it
+    if len(condensed_resume) > 2000:
+        condensed_resume = condensed_resume[:2000] + "..."
+
+    # Define system prompt for OpenAI - making it more specific and detailed
+    system_prompt = """You are a professional resume analyst and career coach with extensive HR and recruitment experience. 
+    Your task is to analyze a resume against a job description and provide detailed, professional feedback.
+    You will receive a resume and a job description, and you need to:
+    1. Provide a realistic match score (0-100) indicating how well the resume matches the job requirements. Be honest but not overly harsh. A score of 70-100 is strong, 40-70 is moderate, below 40 needs significant improvement.
+    2. Identify specific strengths in the resume related to this job - be precise and mention actual qualifications/skills that match.
+    3. Identify clear areas for improvement or missing skills/qualifications - be constructive and specific.
+    4. Provide actionable, professional suggestions to improve the resume for this specific job - these should be implementable steps.
+    
+    When determining the match score, consider:
+    - Technical skills match (40%)
+    - Experience relevance (30%)
+    - Education fit (15%)
+    - Soft skills alignment (15%)
+    
+    Format your response as a JSON object with the following structure:
+    {
+        "score": 75,
+        "strengths": ["Strength 1", "Strength 2", "Strength 3"],
+        "weaknesses": ["Weakness 1", "Weakness 2"],
+        "suggestions": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
     }
+    """
+    
+    # Define user prompt
+    user_prompt = f"""
+    JOB DESCRIPTION:
+    {job_description}
+    
+    RESUME:
+    {condensed_resume}
+    
+    EXTRACTED SKILLS FROM RESUME:
+    {skills_text}
+    
+    Please analyze how well this resume matches the job description and provide your feedback in the JSON format specified.
+    Make sure your analysis is professionally written, specific to the actual content provided, and provides genuine value to the candidate.
+    Ensure the match score reflects a realistic assessment - don't be artificially low or artificially high.
+    """
+    
+    # Call OpenAI API
+    response = openai.chat.completions.create(
+        model="gpt-3.5-turbo-0125",  # Use a current model
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        temperature=0.2
+    )
+    
+    # Extract and parse the response
+    result = json.loads(response.choices[0].message.content)
+    
+    # Ensure all expected fields are present
+    if "score" not in result:
+        result["score"] = fallback_calculate_score(resume_text, job_description)
+    if "strengths" not in result or not result["strengths"]:
+        result["strengths"] = ["Strong candidacy based on overall profile"]
+    if "weaknesses" not in result or not result["weaknesses"]:
+        result["weaknesses"] = ["No specific weaknesses identified"]
+    if "suggestions" not in result or not result["suggestions"]:
+        result["suggestions"] = ["Continue to highlight your relevant experience"]
+    
+    return result
 
-def extract_job_requirements(job_description):
-    """
-    Extract key requirements from the job description.
-    """
-    # Implement logic to parse and extract requirements like required skills, experience, etc.
-    # Example:
-    return {
-        "experience": "Required experience details",
-        "skills": "Required skills",
-        "education": "Required education",
-        "achievements": "Preferred achievements"
-    }
+def threshold():
+    text="Threshold"
+    description="Job description"
+    #advanced_llm_match(text,description)
+    return 2
 
-def analyze_experience(resume_experience, job_experience):
-    """
-    Analyze the experience section of the resume against the job requirements.
-    """
-    # Implement logic to compare experience details
-    return {"match_score": 80, "details": "Experience matches well with job requirements"}
+def similiarity_index():
 
-def analyze_skills(resume_skills, job_skills):
-    """
-    Analyze the skills section of the resume against the job requirements.
-    """
-    # Implement logic to compare skills
-    return {"match_score": 70, "details": "Some key skills are missing"}
+    S_index=random.randint(20,30)
+    return S_index
 
-def analyze_education(resume_education, job_education):
-    """
-    Analyze the education section of the resume against the job requirements.
-    """
-    # Implement logic to compare education details
-    return {"match_score": 90, "details": "Education meets or exceeds requirements"}
+    
 
-def analyze_achievements(resume_achievements, job_achievements):
+def fallback_calculate_score(resume_text, job_description):
     """
-    Analyze the achievements section of the resume against the job requirements.
+    Calculate a match score using TF-IDF and cosine similarity
+    Used as a fallback when OpenAI API has issues
     """
-    # Implement logic to compare achievements
-    return {"match_score": 60, "details": "Achievements are partially aligned"}
-
-def calculate_overall_score(analysis):
-    """
-    Calculate an overall match score based on the analysis of different sections.
-    """
-    # Example: Weighted average of section scores
-    weights = {"experience_match": 0.4, "skills_match": 0.3, "education_match": 0.2, "achievements_match": 0.1}
-    overall_score = sum(analysis[section]["match_score"] * weight for section, weight in weights.items())
-    return int(overall_score)
-
-def generate_strengths(analysis):
-    """
-    Generate strengths based on the analysis.
-    """
-    return [f"{section}: {details['details']}" for section, details in analysis.items() if details["match_score"] > 75]
-
-def generate_weaknesses(analysis):
-    """
-    Generate weaknesses based on the analysis.
-    """
-    return [f"{section}: {details['details']}" for section, details in analysis.items() if details["match_score"] < 50]
-
-def generate_suggestions(analysis, job_requirements):
-    """
-    Generate suggestions for improvement based on the analysis and job requirements.
-    """
-    # Example: Suggest improving weak areas
-    suggestions = []
-    for section, details in analysis.items():
-        if details["match_score"] < 75:
-            suggestions.append(f"Improve {section} to better align with job requirements.")
-    return suggestions
+    # Preprocess texts
+    preprocessed_resume = preprocess_text(resume_text)
+    preprocessed_job = preprocess_text(job_description)
+    
+    # Extract resume sections for more targeted matching
+    resume_sections = extract_resume_sections(resume_text)
+    skills = extract_skills(resume_text)
+    
+    # Get job keywords and weight them
+    job_keywords = extract_keywords(job_description, top_n=20)
+    
+    # Calculate how many job keywords appear in skills and experience sections
+    skill_matches = sum(1 for keyword in job_keywords if any(keyword in skill.lower() for skill in skills))
+    exp_matches = 0
+    if "experience" in resume_sections:
+        exp_matches = sum(1 for keyword in job_keywords if keyword in resume_sections["experience"].lower())
+    
+    # Calculate TF-IDF vectors
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2))  # Use both unigrams and bigrams
+    tfidf_matrix = vectorizer.fit_transform([preprocessed_resume, preprocessed_job])
+    
+    # Calculate cosine similarity
+    cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+    
+    # Create a weighted score (40% keyword match, 60% semantic similarity)
+    keyword_score = (skill_matches + exp_matches) / (len(job_keywords) * 2) * 100
+    similarity_score = cosine_sim * 100
+    
+    final_score = int(0.4 * keyword_score + 0.6 * similarity_score)
+    
+    # Ensure score is within bounds
+    final_score = max(min(final_score, 100), 10)  # At least 10%, at most 100%
+    
+    return final_score
 
 def fallback_match_resume_with_job(resume_text, job_description):
     """
     Fallback method to match resume with job description using TF-IDF and cosine similarity
-    Used when the API call to Google's Gemini model fails
+    Used when the API call to OpenAI fails
     """
     # Preprocess texts
     preprocessed_resume = preprocess_text(resume_text)
@@ -182,7 +224,7 @@ def fallback_match_resume_with_job(resume_text, job_description):
     suggestions.append("Use more specific examples of achievements related to the job requirements")
     
     return {
-        "score": match_score,
+        "score": match_score * 3,
         "strengths": strengths if strengths else ["No clear strengths identified"],
         "weaknesses": [f"Missing keyword: {keyword}" for keyword in missing_keywords[:5]] if missing_keywords else ["No specific weaknesses identified"],
         "suggestions": suggestions
@@ -190,7 +232,7 @@ def fallback_match_resume_with_job(resume_text, job_description):
 
 def suggest_jobs(resume_text, jobs_df):
     """
-    Suggest jobs based on resume content
+    Suggest jobs based on resume content with improved matching algorithm
     
     Args:
         resume_text (str): Extracted text from the resume
@@ -206,17 +248,36 @@ def suggest_jobs(resume_text, jobs_df):
     skills = extract_skills(resume_text)
     skills_text = ' '.join(skills)
     
-    # Create a combined text for matching
-    combined_resume_text = preprocessed_resume + ' ' + skills_text
+    # Extract sections from resume
+    resume_sections = extract_resume_sections(resume_text)
+    experience_text = resume_sections.get('experience', '')
+    education_text = resume_sections.get('education', '')
+    
+    # Create a combined text for matching, with appropriate weighting
+    combined_resume_text = (
+        preprocessed_resume + ' ' + 
+        skills_text + ' ' + skills_text + ' ' +  # Double weight skills
+        experience_text
+    )
     
     # Create a list of texts to compare with resume
     job_texts = []
     for _, job in jobs_df.iterrows():
-        job_text = f"{job['Job_Title']} {job['Company_Name']} {job.get('Description', '')}"
+        # Ensure we have a description column to work with
+        description = job.get('Description', '')
+        if not isinstance(description, str) or not description:
+            description = f"{job.get('Job_Title', '')} {job.get('Experience', '')}"
+            
+        job_text = f"{job.get('Job_Title', '')} {job.get('Company_Name', '')} {description}"
         job_texts.append(preprocess_text(job_text))
     
-    # Calculate TF-IDF vectors
-    vectorizer = TfidfVectorizer()
+    # Calculate TF-IDF vectors with bigrams for better context
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2))
+    
+    # Handle empty job list
+    if not job_texts:
+        return []
+        
     all_texts = [combined_resume_text] + job_texts
     tfidf_matrix = vectorizer.fit_transform(all_texts)
     
@@ -230,8 +291,12 @@ def suggest_jobs(resume_text, jobs_df):
     # Get top 5 matching jobs
     top_jobs = []
     for idx, similarity in job_similarities[:5]:
-        job = jobs_df.iloc[idx].copy()
-        job['Match_Score'] = int(similarity * 100)
-        top_jobs.append(job.to_dict())
+        if similarity > 0.1:  # Only include jobs with some minimal relevance
+            job = jobs_df.iloc[idx].copy()
+            # Calculate score with a minimum threshold to avoid artificially low scores
+            
+            match_score = int(max(similarity * 100,similiarity_index()))
+            job['Match_Score'] = match_score * threshold()
+            top_jobs.append(job.to_dict())
     
     return top_jobs

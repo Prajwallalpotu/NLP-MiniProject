@@ -51,6 +51,12 @@ const JobSuggestion = () => {
     return 'table-danger';
   };
 
+  const getMatchColor = (score) => {
+    if (score >= 70) return '#28a745';
+    if (score >= 40) return '#ffc107';
+    return '#dc3545';
+  };
+
   return (
     <Container>
       <h1 className="page-title">Job Suggestion</h1>
@@ -105,45 +111,54 @@ const JobSuggestion = () => {
       )}
       
       {suggestions && !loading && (
-        <div className="results-container">
-          <h2 className="text-center mb-4">Recommended Jobs</h2>
-          
-          <div className="table-container">
-            <Table striped hover responsive className="job-table">
-              <thead>
-                <tr>
-                  <th>Job Title</th>
-                  <th>Company</th>
-                  <th>Location</th>
-                  <th>Experience</th>
-                  <th>CTC</th>
-                  <th>Posted</th>
-                  <th>Match Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {suggestions.length > 0 ? (
-                  suggestions.map((job, index) => (
-                    <tr key={index} className={getMatchClass(job.Match_Score)}>
-                      <td>{job.Job_Title}</td>
-                      <td>{job.Company_Name}</td>
-                      <td>{job.Location}</td>
-                      <td>{job.Experience}</td>
-                      <td>{job.CTC}</td>
-                      <td>{job.Posted}</td>
-                      <td><strong>{job.Match_Score}%</strong></td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan="7" className="text-center">No job suggestions found</td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </div>
-        </div>
-      )}
+  <div className="results-container">
+    <h2 className="text-center mb-4">Recommended Jobs</h2>
+    
+    <div className="table-container">
+      <Table striped hover responsive className="job-table">
+        <thead>
+          <tr>
+            <th>Job Title</th>
+            <th>Company</th>
+            <th>Location</th>
+            <th>Experience</th>
+            <th>CTC</th>
+            <th>Posted</th>
+            <th>Match Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {suggestions.length > 0 ? (
+            suggestions.map((job, index) => (
+              <tr key={index} className={getMatchClass(job.Match_Score)}>
+                <td>{job.Job_Title}</td>
+                <td>{job.Company_Name}</td>
+                <td>{job.Location}</td>
+                <td>{job.Experience}</td>
+                <td>{job.CTC}</td>
+                <td>{job.Posted}</td>
+                <td>
+                  <div className="match-badge" style={{backgroundColor: getMatchColor(job.Match_Score)}}>
+                    <strong>{job.Match_Score}%</strong>
+                  </div>
+                </td>
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan="7" className="text-center">
+                <Alert variant="info">
+                  <p className="mb-0"><i className="bi bi-info-circle me-2"></i>No matching jobs are currently available for your profile.</p>
+                  <p className="mb-2">We recommend broadening your search or checking back later as our job database is updated regularly.</p>
+                </Alert>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </Table>
+    </div>
+  </div>
+)}
     </Container>
   );
 };

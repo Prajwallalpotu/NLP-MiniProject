@@ -11,12 +11,10 @@ try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('corpora/stopwords')
     nltk.data.find('corpora/wordnet')
-    nltk.data.find('tokenizers/punkt_tab')  # Check for punkt_tab
 except LookupError:
     nltk.download('punkt')
     nltk.download('stopwords')
     nltk.download('wordnet')
-    nltk.download('punkt_tab')  # Download punkt_tab if missing
 
 def preprocess_text(text):
     """
@@ -110,3 +108,77 @@ def extract_keywords(text, top_n=10):
     top_keywords = [feature_names[i] for i in sorted_idx[:top_n]]
     
     return top_keywords
+
+def extract_entities(text):
+    """
+    Extract named entities from text using spaCy
+    
+    Args:
+        text (str): Input text
+        
+    Returns:
+        dict: Dictionary with entity types and their values
+    """
+    import spacy
+    
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except OSError:
+        import subprocess
+        import sys
+        subprocess.call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+        nlp = spacy.load("en_core_web_sm")
+    
+    doc = nlp(text)
+    entities = {}
+    
+    for ent in doc.ents:
+        if ent.label_ not in entities:
+            entities[ent.label_] = []
+        entities[ent.label_].append(ent.text)
+    
+    return entities
+
+def extract_resume_sections(text):
+    """
+    Extract common resume sections based on headings
+    
+    Args:
+        text (str): Resume text
+        
+    Returns:
+        dict: Dictionary with section names and their content
+    """
+    # Common section headers in resumes
+    section_headers = [
+        'education', 'experience', 'work experience', 'employment', 'skills',
+        'technical skills', 'professional skills', 'certifications', 'projects',
+        'achievements', 'awards', 'publications', 'languages', 'interests',
+        'summary', 'objective', 'profile', 'about me', 'personal information',
+        'contact information', 'references', 'volunteer', 'activities'
+    ]
+    
+    # Create pattern to match section headers
+    header_pattern = '|'.join([fr'\b{re.escape(header)}\b' for header in section_headers])
+    pattern = re.compile(fr'(?i)(^|\n)[\s\*]*({header_pattern})[\s\*]*(:|$|\n)', re.MULTILINE)
+    
+    # Find all section headers in the text
+    matches = list(pattern.finditer(text))
+    
+    # Extract sections
+    sections = {}
+    for i, match in enumerate(matches):
+        section_name = match.group(2).strip().lower()
+        start_pos = match.end()
+        
+        # Determine end position (start of next section or end of text)
+        if i < len(matches) - 1:
+            end_pos = matches[i+1].start()
+        else:
+            end_pos = len(text)
+        
+        # Extract section content
+        section_content = text[start_pos:end_pos].strip()
+        sections[section_name] = section_content
+    
+    return sections
